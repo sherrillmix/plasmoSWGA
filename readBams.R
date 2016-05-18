@@ -1,4 +1,6 @@
 library(dnar)
+library(ampcountr)
+library(parallel)
 
 bamFiles<-list.files('data','bam$',full.names=TRUE)
 
@@ -24,5 +26,14 @@ for(ii in bamFiles){
 ref<-read.fa('data/Pf3D7_v3.fasta')
 ref$seq<-toupper(ref$seq)
 primerData<-read.csv('data/ChosenSets.csv',stringsAsFactors=FALSE,row.names=1)
-primers<-strsplit(primerData$primers,'.')
+primerSets<-strsplit(primerData$primers,',')
+names(primerSets)<-primerData$X_id
+predictCover<-mclapply(primerSets,function(primers){
+	fs<-gregexpr(paste(primers,collapse='|'),ref$seq)
+	rs<-gregexpr(paste(revComp(primers),collapse='|'),ref$seq)
+	rs<-lapply(rs,function(r)r+attr(r,'match.length')-1)
+	out<-mcmapply(predictAmplifications,fs,rs,SIMPLIFY=FALSE,MoreArgs=list(maxLength=30000),mc.cores=length(primers))
+	names(out)<-ref$name
+	return(out)
+})
 

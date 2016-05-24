@@ -1,6 +1,7 @@
 library(dnar)
 library(ampcountr)
 library(parallel)
+library(GenomicRanges)
 
 bamFiles<-list.files('data','bam$',full.names=TRUE)
 
@@ -56,7 +57,7 @@ mclapply(names(predictCover),function(ii){
 		thisF<-predictCover[[ii]][['for']][[jj]]
 		thisR<-predictCover[[ii]][['rev']][[jj]]
 		plot(1,1,xlim=c(1,max(thisPredict$end)),ylim=ylim,main=jj,xlab='Position',ylab='Cover')
-		abline(v=thisF,col='#FF000055',lty=2)
+		#abline(v=thisF,col='#FF000055',lty=2)
 		#abline(v=thisR,col='#0000FF55',lty=2)
 		sapply(thisCover,function(xx)points(xx$pos,xx$count))
 		segments(thisPredict$start,thisPredict$amplifications/maxPredict*ylim[2],thisPredict$end,thisPredict$amplifications/maxPredict*ylim[2],col='#00FF0099')
@@ -64,6 +65,53 @@ mclapply(names(predictCover),function(ii){
 	}
 	dev.off()
 },mc.cores=10)
+
+grs<-lapply(predictCover,function(xx){
+	cover<-do.call(rbind,lapply(names(xx[['pred']]),function(chr){
+		out<-xx[['pred']][[chr]]
+		out$chr<-chr
+		return(out)
+	}))
+	gr<-GRanges(seqnames=cover$chr,ranges=IRanges(cover$start,end=cover$end),score=cover$amplifications)
+	return(gr)
+})
+
+
+
+targets<-c('A','B','C')
+targetCols<-sprintf('count%s',targets)
+names(targetCols)<-targets
+coverDf<-mclapply(names(predictCover),function(ii,...){
+	message(ii)
+	covers<-lapply(targets,function(target){
+			cover<-cover[[grep(sprintf('%s%s_',ii,target),names(cover))]]
+			countCol<-targetCols[target]
+			colnames(cover)[colnames(cover)=='count']<-countCol
+			return(cover)
+	})
+	allCover<-Reduce(function(xx,yy)merge(xx,yy,all=TRUE),covers)
+	allCover[is.na(allCover)]<-0
+	allCover$minProp<-apply(apply(allCover[,targetCols],2,function(xx)xx/sum(xx)),1,min)
+	gr<-grs[[ii]]
+	matches<-findOverlaps(GRanges(seqnames=allCover$chr,ranges=IRanges(allCover$pos,end=allCover$pos)),gr)
+	allCover$predict[queryHits(matches)]<-score(gr)[subjectHits(matches)]
+	return(allCover)
+},mc.cores=10)
+names(coverDf)<-names(predictCover)
+
+
+nonZeroCounts<-do.call(rbind,mclapply(coverDf,function(xx)table(apply(xx[,targetCols]>0,1,sum)),mc.cores=10))
+nonZeroCounts[,'3']/apply(nonZeroCounts[,c('1','2','3')],1,sum)
+
+nonZeroCounts<-do.call(rbind,mclapply(coverDf,function(xx)table(apply(xx[,targetCols]>0,1,sum)),mc.cores=10))
+
+sapply(coverDf,function(xx)with(xx[xx$minProp>0,],cor(minProp,predict,method='spearman')))
+sapply(coverDf,function(xx)with(xx[xx$minProp>0,],cor.test(minProp,predict,method='spearman')))
+
+pdf('out/predictMinProp.pdf')
+	sapply(names(coverDf),function(primer){xx<-coverDf[[primer]];with(xx[xx$minProp>0,],plot(minProp,predict,'xlab'='Minimum proportion of reads in A, B and C',ylab='Predicted cover',main=primer,log='xy',cex=.5,col='#00000044'))})
+dev.off()
+
 
 
 mclapply(names(predictCover),function(ii){
